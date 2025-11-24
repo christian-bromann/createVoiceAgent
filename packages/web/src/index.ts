@@ -46,7 +46,7 @@ app.get(
       )
       .pipeThrough(new AgentTransform(agent))
       .pipeThrough(new AIMessageChunkTransform())
-      .pipeThrough(new SentenceChunkTransform()) // Stream sentences to TTS as they're generated
+      // .pipeThrough(new SentenceChunkTransform()) // Stream sentences to TTS as they're generated
       .pipeThrough(
         new ElevenLabsTTSTransform({
           apiKey: process.env.ELEVENLABS_API_KEY!,

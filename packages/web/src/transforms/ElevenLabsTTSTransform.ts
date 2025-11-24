@@ -14,34 +14,34 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
     let connectionPromise: Promise<void> | null = null;
     let activeController: TransformStreamDefaultController<Buffer> | null =
       null;
+    let isShuttingDown = false;
 
-    const resetConnection = () => {
-      if (ws) {
-        try {
-          ws.close();
-        } catch (e) {
-          console.error("ElevenLabs: Error closing WebSocket:", e);
-        }
-        ws = null;
-      }
-      connectionPromise = null;
+    // Promise that resolves when isFinal is received (for flush)
+    let finalResolve: (() => void) | null = null;
+    let finalPromise: Promise<void> | null = null;
+
+    const resetFinalPromise = () => {
+      finalPromise = new Promise((resolve) => {
+        finalResolve = resolve;
+      });
     };
 
-    const ensureConnection = () => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        return Promise.resolve();
-      }
-      if (connectionPromise) return connectionPromise;
+    const getWebSocketUrl = () => {
+      const modelId = options.modelId || "eleven_monolingual_v1";
+      return `wss://api.elevenlabs.io/v1/text-to-speech/${options.voiceId}/stream-input?model_id=${modelId}&output_format=pcm_16000`;
+    };
 
-      connectionPromise = new Promise((resolve, reject) => {
-        const modelId = options.modelId || "eleven_monolingual_v1";
-        const url = `wss://api.elevenlabs.io/v1/text-to-speech/${options.voiceId}/stream-input?model_id=${modelId}&output_format=pcm_16000`;
+    const createConnection = (): Promise<void> => {
+      resetFinalPromise();
 
-        console.log(`ElevenLabs: Connecting to ${url}`);
-        ws = new WebSocket(url);
+      return new Promise((resolve, reject) => {
+        const url = getWebSocketUrl();
+        console.log(`ElevenLabs: Connecting...`);
+        const newWs = new WebSocket(url);
 
-        ws.on("open", () => {
+        newWs.on("open", () => {
           console.log("ElevenLabs: WebSocket connected");
+          // BOS (Beginning of Stream) message
           const bosMessage = {
             text: " ",
             voice_settings: {
@@ -50,11 +50,12 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
             },
             xi_api_key: options.apiKey,
           };
-          ws?.send(JSON.stringify(bosMessage));
+          newWs.send(JSON.stringify(bosMessage));
+          ws = newWs;
           resolve();
         });
 
-        ws.on("message", (data: Buffer) => {
+        newWs.on("message", (data: Buffer) => {
           try {
             const msgStr = data.toString();
             const response = JSON.parse(msgStr);
@@ -66,7 +67,10 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
               }
             }
             if (response.isFinal) {
-              console.log("ElevenLabs: Received isFinal signal");
+              if (finalResolve) {
+                finalResolve();
+                finalResolve = null;
+              }
             }
             if (response.error) {
               console.error(
@@ -79,20 +83,47 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
           }
         });
 
-        ws.on("error", (err) => {
+        newWs.on("error", (err) => {
           console.error("ElevenLabs WS Error:", err);
-          resetConnection();
+          if (ws === newWs) {
+            ws = null;
+            connectionPromise = null;
+          }
           reject(err);
         });
 
-        ws.on("close", (code, reason) => {
+        newWs.on("close", (code, reason) => {
           console.log(
             `ElevenLabs: WebSocket closed (code: ${code}, reason: ${reason})`
           );
-          resetConnection();
+          if (ws === newWs) {
+            ws = null;
+            connectionPromise = null;
+          }
+          // Resolve any pending final promise
+          if (finalResolve) {
+            finalResolve();
+            finalResolve = null;
+          }
         });
       });
-      return connectionPromise;
+    };
+
+    const ensureConnection = async (): Promise<void> => {
+      // Check if current connection is usable
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        return;
+      }
+      // Wait for pending connection
+      if (connectionPromise) {
+        await connectionPromise;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          return;
+        }
+      }
+      // Create new connection
+      connectionPromise = createConnection();
+      await connectionPromise;
     };
 
     super({
@@ -100,10 +131,11 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
         activeController = controller;
       },
       async transform(token) {
+        if (isShuttingDown) return;
+
         try {
           await ensureConnection();
           if (ws && ws.readyState === WebSocket.OPEN) {
-            // try_trigger_generation: true forces low latency
             const payload = { text: token, try_trigger_generation: true };
             ws.send(JSON.stringify(payload));
           } else {
@@ -114,18 +146,35 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
           }
         } catch (err) {
           console.error("ElevenLabs: Error in transform:", err);
-          // Don't error the controller, just log, so we can retry next chunk?
-          // If we error the controller, the whole pipeline dies.
         }
       },
       async flush() {
         console.log("ElevenLabs: Flushing stream...");
+        isShuttingDown = true;
+
         if (ws && ws.readyState === WebSocket.OPEN) {
+          // Send EOS (end of stream)
           ws.send(JSON.stringify({ text: "" }));
-          // Wait for a bit
-          await new Promise((r) => setTimeout(r, 1000));
-          resetConnection();
+
+          // Wait for final audio with timeout
+          const timeoutPromise = new Promise<void>((resolve) => {
+            setTimeout(() => {
+              console.log("ElevenLabs: Flush timeout reached");
+              resolve();
+            }, 5000);
+          });
+
+          await Promise.race([finalPromise, timeoutPromise]);
+
+          // Close connection
+          try {
+            ws.close();
+          } catch {
+            // Ignore close errors
+          }
+          ws = null;
         }
+        connectionPromise = null;
       },
     });
   }
