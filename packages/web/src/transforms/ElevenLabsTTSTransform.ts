@@ -12,9 +12,23 @@ interface ElevenLabsOptions {
    * Default: 500ms
    */
   flushDelayMs?: number;
+  /**
+   * Callback called when TTS output is interrupted (for barge-in)
+   */
+  onInterrupt?: () => void;
 }
 
 export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
+  private _interrupt: () => void = () => {};
+  
+  /**
+   * Interrupt the current TTS output (for barge-in support).
+   * Stops audio generation and clears any pending tokens.
+   */
+  interrupt(): void {
+    this._interrupt();
+  }
+
   constructor(options: ElevenLabsOptions) {
     let ws: WebSocket | null = null;
     let connectionPromise: Promise<void> | null = null;
@@ -50,6 +64,12 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
     let audioChunkCount = 0;
     let totalAudioBytes = 0;
     let tokensSent = 0;
+    
+    // Track if we're currently interrupted (for barge-in)
+    let isInterrupted = false;
+    
+    // Track if the stream has been terminated
+    let isStreamTerminated = false;
 
     const resetFinalPromise = () => {
       finalPromise = new Promise((resolve) => {
@@ -75,6 +95,45 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
       // Reset state for next connection
       eosSent = false;
       hasSentText = false;
+    };
+
+    /**
+     * Interrupt TTS output for barge-in
+     */
+    const interruptTTS = () => {
+      if (isInterrupted) return;
+      
+      console.log("ElevenLabs: Interrupted by user (barge-in)");
+      isInterrupted = true;
+      
+      // Cancel any pending flush timer
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      
+      // Clear token queue
+      tokenQueue.length = 0;
+      
+      // Close connection immediately (don't wait for isFinal)
+      closeConnection();
+      
+      // Resolve any pending flush
+      if (finalResolve) {
+        finalResolve();
+        finalResolve = null;
+      }
+      
+      // If flushing, signal it's done
+      isFlushing = false;
+      
+      // Call the onInterrupt callback
+      options.onInterrupt?.();
+      
+      // Reset interrupted state after a brief delay to allow new input
+      setTimeout(() => {
+        isInterrupted = false;
+      }, 100);
     };
 
     /**
@@ -193,6 +252,9 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
         });
 
         newWs.on("message", (data: Buffer) => {
+          // Don't process messages if stream is terminated
+          if (isStreamTerminated) return;
+          
           try {
             const msgStr = data.toString();
             const response = JSON.parse(msgStr);
@@ -202,10 +264,14 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
               audioChunkCount++;
               totalAudioBytes += chunk.length;
               
-              if (activeController) {
-                activeController.enqueue(chunk);
-              } else {
-                console.warn("ElevenLabs: No active controller, dropping audio chunk");
+              if (activeController && !isStreamTerminated) {
+                try {
+                  activeController.enqueue(chunk);
+                } catch {
+                  // Controller might be closed, mark stream as terminated
+                  console.warn("ElevenLabs: Controller closed, stopping audio output");
+                  isStreamTerminated = true;
+                }
               }
             }
             if (response.isFinal) {
@@ -231,7 +297,10 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
               );
             }
           } catch (e) {
-            console.error("ElevenLabs: Error parsing message:", e);
+            // Don't log if stream is terminated - expected behavior
+            if (!isStreamTerminated) {
+              console.error("ElevenLabs: Error parsing message:", e);
+            }
           }
         });
 
@@ -348,6 +417,7 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
       async flush() {
         console.log("ElevenLabs: Flushing stream...");
         isShuttingDown = true;
+        isStreamTerminated = true;
 
         // Cancel any pending auto-flush
         cancelScheduledFlush();
@@ -385,5 +455,8 @@ export class ElevenLabsTTSTransform extends TransformStream<string, Buffer> {
         connectionPromise = null;
       },
     });
+
+    // Expose interrupt method (must be after super() call)
+    this._interrupt = interruptTTS;
   }
 }

@@ -71,6 +71,36 @@ app.get(
     // Store WebSocket reference for use in callbacks
     let signalingWs: { send: (data: string) => void; readyState: number } | null = null;
 
+    // Helper to send signaling messages (defined early for use in callbacks)
+    function sendSignalingMessage(message: object) {
+      if (signalingWs && signalingWs.readyState === 1) {
+        signalingWs.send(JSON.stringify(message));
+      }
+    }
+
+    // Create TTS transform separately so we can access interrupt()
+    const ttsTransform = new ElevenLabsTTSTransform({
+      apiKey: process.env.ELEVENLABS_API_KEY!,
+      voiceId: process.env.ELEVENLABS_VOICE_ID!,
+      onInterrupt: () => {
+        // Tell client to clear audio buffer
+        if (audioDataChannel && audioDataChannel.readyState === "open") {
+          audioDataChannel.send(JSON.stringify({ type: "clear-audio" }));
+        }
+      },
+    });
+
+    // Create STT transform with speech detection for barge-in
+    const sttTransform = new AssemblyAISTTTransform({
+      apiKey: process.env.ASSEMBLYAI_API_KEY!,
+      sampleRate: 16000,
+      onSpeechStart: () => {
+        // User started speaking - interrupt TTS
+        console.log("Barge-in: User started speaking, interrupting TTS");
+        ttsTransform.interrupt();
+      },
+    });
+
     const inputStream = new ReadableStream<Buffer>({
       start(c) {
         controller = c;
@@ -83,24 +113,19 @@ app.get(
     });
 
     const pipeline = observableStream
-      .pipeThrough(
-        new AssemblyAISTTTransform({
-          apiKey: process.env.ASSEMBLYAI_API_KEY!,
-          sampleRate: 16000,
-        })
-      )
+      .pipeThrough(sttTransform)
       .pipeThrough(new AgentTransform(agent))
       .pipeThrough(new AIMessageChunkTransform())
-      .pipeThrough(new ElevenLabsTTSTransform({
-        apiKey: process.env.ELEVENLABS_API_KEY!,
-        voiceId: process.env.ELEVENLABS_VOICE_ID!,
-      }));
+      .pipeThrough(ttsTransform);
 
     const reader = pipeline.getReader();
 
     // Track audio output for diagnostics
     let audioChunksSent = 0;
     let totalBytesSent = 0;
+
+    // Track if pipeline has errored to avoid repeated error logs
+    let pipelineErrored = false;
 
     // Start reading from pipeline and send through data channel
     async function startPipelineReader() {
@@ -125,14 +150,12 @@ app.get(
         }
         console.log(`Pipeline: Finished reading (${audioChunksSent} chunks, ${totalBytesSent} bytes sent)`);
       } catch (e) {
-        console.error("Pipeline error:", e);
-      }
-    }
-
-    // Helper to send signaling messages
-    function sendSignalingMessage(message: object) {
-      if (signalingWs && signalingWs.readyState === 1) {
-        signalingWs.send(JSON.stringify(message));
+        if (!pipelineErrored) {
+          pipelineErrored = true;
+          console.error("Pipeline error:", e);
+          // Mark pipeline as closed to stop further processing
+          pipelineClosed = true;
+        }
       }
     }
 
@@ -191,17 +214,20 @@ app.get(
             };
 
             channel.onmessage = (msgEvent) => {
-              // Don't enqueue if pipeline is closed
-              if (pipelineClosed) return;
+              // Don't enqueue if pipeline is closed or errored
+              if (pipelineClosed || pipelineErrored) return;
               
               // Receive audio data from client
               const data = msgEvent.data;
               if (data instanceof ArrayBuffer) {
                 try {
                   controller.enqueue(Buffer.from(data));
-                } catch (e) {
-                  // Controller might be closed, ignore
-                  console.warn("Failed to enqueue audio data:", e);
+                } catch {
+                  // Controller might be closed - mark pipeline as closed to avoid repeated errors
+                  if (!pipelineClosed) {
+                    console.warn("Failed to enqueue audio data, closing pipeline");
+                    pipelineClosed = true;
+                  }
                 }
               } else if (typeof data === "string") {
                 // Could be a control message
