@@ -10,15 +10,19 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "create-voice-agent": "workspace:*"
-  },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "create-voice-agent": "workspace:*",
     "typescript": "~5.9.3"
   },
   "peerDependencies": {
     "create-voice-agent": "workspace:*"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
 

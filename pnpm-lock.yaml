@@ -109,14 +109,13 @@ importers:
         version: 5.9.3
 
   provider/elevenlabs:
-    dependencies:
-      create-voice-agent:
-        specifier: workspace:*
-        version: link:../../core
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.1
+      create-voice-agent:
+        specifier: workspace:*
+        version: link:../../core
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
