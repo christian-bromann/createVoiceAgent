@@ -1,6 +1,6 @@
 {
   "name": "@create-voice-agent/openai",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "description": "OpenAI Speech-to-Text and Text-to-Speech integration for voice agents",
   "exports": {
@@ -28,4 +28,3 @@
     "access": "public"
   }
 }
-
