@@ -1,7 +1,7 @@
 # fly.toml - Fly.io configuration for voice-sandwich-demo (WebRTC optimized)
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 
-app = 'voice-sandwich-demo'
+app = 'create-voice-agent'
 primary_region = 'sjc'
 
 [build]
