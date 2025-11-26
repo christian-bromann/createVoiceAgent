@@ -6,7 +6,7 @@ import { ChatGoogleGenerativeAI } from '@langchain/google-genai'
 import { MemorySaver } from '@langchain/langgraph'
 import { createVoiceAgent } from 'create-voice-agent'
 
-import { fillerMiddleware } from './middleware.js'
+import { createFillerMiddleware } from './middleware.js'
 import { addToOrder, confirmOrder, hangUp } from './tools.js'
 
 const SYSTEM_PROMPT = `
@@ -159,7 +159,7 @@ export function createSandwichShopVoiceAgent(params: CreateVoiceAgentParams) {
     // Voice configuration
     stt,
     tts,
-    middleware: [fillerMiddleware],
+    middleware: [createFillerMiddleware()],
 
     // Callbacks
     onInterrupt: (value: unknown) => {
