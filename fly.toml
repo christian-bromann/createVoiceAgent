@@ -1,70 +1,23 @@
-# fly.toml - Fly.io configuration for voice-sandwich-demo (WebRTC optimized)
+# fly.toml app configuration file generated for create-voice-agent on 2025-11-26T23:35:53Z
+#
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
 app = 'create-voice-agent'
 primary_region = 'sjc'
 
 [build]
 
-[env]
-  NODE_ENV = 'production'
-  PORT = '3001'
-
-# =============================================================================
-# HTTP Service - Handles WebSocket signaling and static files
-# =============================================================================
 [http_service]
   internal_port = 3001
   force_https = true
-  # Use 'suspend' instead of 'stop' - faster wake-up for real-time apps
-  auto_stop_machines = 'suspend'
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  # Keep at least 1 machine running to avoid cold starts during calls
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ['app']
 
-  [http_service.concurrency]
-    type = 'connections'
-    hard_limit = 50
-    soft_limit = 25
-
-  # WebSocket and HTTP options
-  [http_service.http_options]
-    h2_backend = false
-    # Increase idle timeout for long-running WebSocket/WebRTC connections
-    idle_timeout = 300
-
-# =============================================================================
-# UDP Service - WebRTC ICE/STUN traffic (ports 10000-10100)
-# =============================================================================
-[[services]]
-  protocol = 'udp'
-  internal_port = 10000
-
-  [[services.ports]]
-    port = 10000
-
-# =============================================================================
-# VM Configuration - Optimized for real-time audio processing
-# =============================================================================
 [[vm]]
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
-
-# =============================================================================
-# Statics - Serve static files efficiently (optional optimization)
-# =============================================================================
-# [[statics]]
-#   guest_path = '/app/playground/src/static'
-#   url_prefix = '/static'
-
-# =============================================================================
-# Health Check - Basic endpoint check
-# =============================================================================
-[[http_service.checks]]
-  grace_period = '30s'
-  interval = '30s'
-  method = 'GET'
-  path = '/'
-  timeout = '10s'
+  memory_mb = 2048
