@@ -1,6 +1,6 @@
 {
   "name": "@create-voice-agent/elevenlabs",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "ElevenLabs Text-to-Speech integration for voice agents",
   "exports": {
