@@ -1,6 +1,6 @@
 {
   "name": "@create-voice-agent/hume",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "Hume AI Text-to-Speech integration for voice agents",
   "exports": {
@@ -29,4 +29,3 @@
     "access": "public"
   }
 }
-
